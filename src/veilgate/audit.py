@@ -21,6 +21,7 @@ class AuditSink:
         status: int,
         code: str,
         duration_ms: int,
+        tool_id: str | None = None,
     ) -> None:
         event = {
             "timestamp": datetime.now(UTC).isoformat(),
@@ -28,6 +29,7 @@ class AuditSink:
             "request_id": request_id,
             "principal": principal,
             "resource_id": resource_id,
+            "tool_id": tool_id,
             "policy_version": policy_version,
             "status": status,
             "code": code,

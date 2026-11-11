@@ -5,6 +5,7 @@ import re
 import tomllib
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -64,12 +65,64 @@ class Limits(StrictModel):
     max_concurrent_requests: int = Field(default=4, ge=1, le=32)
 
 
+class Tool(StrictModel):
+    id: Identifier
+    description: Annotated[str, Field(min_length=1, max_length=512)]
+    adapter: Literal["csv_read", "csv_aggregate", "api_read"]
+    allowed_principals: Annotated[list[Identifier], Field(min_length=1, max_length=100)]
+    # Each argument is required and restricted to an owner-approved finite set.
+    arguments: dict[Identifier, Annotated[list[str], Field(min_length=1, max_length=100)]] = Field(
+        default_factory=dict
+    )
+    argument_filters: dict[Identifier, Column] = Field(default_factory=dict)
+    published_fields: Annotated[list[Column], Field(min_length=1, max_length=100)]
+    path: str | None = None
+    snapshot_sha256: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
+    endpoint: str | None = None
+    credential_env: Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,127}$")] | None = None
+    records_path: list[Column] = Field(default_factory=list)
+    field_paths: dict[Column, list[Column]] = Field(default_factory=dict)
+    group_by: Column | None = None
+    sum_field: Column | None = None
+    min_group_rows: int = Field(default=1, ge=1, le=10_000)
+
+    @model_validator(mode="after")
+    def valid_tool(self) -> Self:
+        if len(self.published_fields) != len(set(self.published_fields)):
+            raise ValueError("duplicate fields")
+        if not set(self.argument_filters).issubset(self.arguments):
+            raise ValueError("unknown argument filter")
+        if self.adapter == "api_read":
+            endpoint = urlsplit(self.endpoint or "")
+            if (
+                endpoint.scheme != "https"
+                or not endpoint.hostname
+                or endpoint.username
+                or endpoint.password
+                or endpoint.fragment
+                or self.path is not None
+                or self.snapshot_sha256 is not None
+            ):
+                raise ValueError("invalid API target")
+        else:
+            Resource.safe_path(self.path or "")
+            if self.endpoint is not None or self.credential_env is not None:
+                raise ValueError("invalid local target")
+        if self.adapter == "csv_aggregate":
+            if not self.snapshot_sha256 or not self.group_by or not self.sum_field:
+                raise ValueError("aggregate requires snapshot and columns")
+            if not set(self.published_fields).issubset({"group", "count", "total"}):
+                raise ValueError("invalid aggregate output")
+        return self
+
+
 class Settings(StrictModel):
     schema_version: Literal[1]
     policy_version: Identifier
     data_root: str
     principals: Annotated[list[Principal], Field(min_length=1, max_length=100)]
-    resources: Annotated[list[Resource], Field(min_length=1, max_length=100)]
+    resources: Annotated[list[Resource], Field(max_length=100)] = Field(default_factory=list)
+    tools: Annotated[list[Tool], Field(max_length=100)] = Field(default_factory=list)
     limits: Limits = Field(default_factory=Limits)
 
     @field_validator("schema_version", mode="before")
@@ -91,9 +144,14 @@ class Settings(StrictModel):
         ids = [p.id for p in self.principals]
         envs = [p.token_env for p in self.principals]
         resources = [r.id for r in self.resources]
-        if any(len(values) != len(set(values)) for values in (ids, envs, resources)):
+        tools = [t.id for t in self.tools]
+        if not resources and not tools:
+            raise ValueError("no registered resources or tools")
+        if any(len(values) != len(set(values)) for values in (ids, envs, resources, tools)):
             raise ValueError("duplicate configuration identifier")
         if any(not set(r.allowed_principals).issubset(ids) for r in self.resources):
+            raise ValueError("unknown principal")
+        if any(not set(t.allowed_principals).issubset(ids) for t in self.tools):
             raise ValueError("unknown principal")
         return self
 

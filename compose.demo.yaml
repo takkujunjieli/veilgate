@@ -1,0 +1,33 @@
+services:
+  veilgate:
+    build: .
+    environment:
+      VEILGATE_DEMO_TOKEN: "${VEILGATE_DEMO_TOKEN:?Generate a token}"
+      VEILGATE_SECOND_TOKEN: "${VEILGATE_SECOND_TOKEN:?Generate a different token}"
+    volumes:
+      - ./examples/gateway.toml:/config/policy.toml:ro
+      - ./examples/data:/data:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 1.0
+  agent:
+    profiles: [agent]
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    environment:
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      VEILGATE_AGENT_TOKEN: "${VEILGATE_DEMO_TOKEN}"
+    volumes:
+      - ./local/traces:/traces
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    mem_limit: 128m
+    depends_on:
+      veilgate:
+        condition: service_healthy

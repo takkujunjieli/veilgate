@@ -23,8 +23,12 @@ from veilgate.auth import Authenticator
 from veilgate.config import Column, Settings, StrictModel, load_settings, load_tokens
 from veilgate.errors import GatewayError, StartupError
 from veilgate.files import FileStore
+from veilgate.gateway import Gateway
 from veilgate.policy import Policy
-from veilgate.publisher import publish_csv
+
+
+class ToolInput(StrictModel):
+    arguments: dict[str, str] = Field(default_factory=dict)
 
 
 class ReadInput(StrictModel):
@@ -68,7 +72,7 @@ class Boundary:
             return
         started = time.monotonic()
         state = scope.setdefault("state", {})
-        state.update(principal=None, resource_id=None, code="ok")
+        state.update(principal=None, resource_id=None, tool_id=None, code="ok")
         request_id = uuid.uuid4().hex
         acquired = False
         messages: list[Message] = []
@@ -135,6 +139,7 @@ class Boundary:
                 request_id=request_id,
                 principal=state["principal"],
                 resource_id=state["resource_id"],
+                tool_id=state["tool_id"],
                 policy_version=self.settings.policy_version,
                 status=status,
                 code=state["code"],
@@ -159,6 +164,11 @@ def build_app(settings: Settings, audit: AuditSink | None = None) -> Boundary:
     auth = Authenticator(load_tokens(settings))
     policy = Policy(settings)
     store = FileStore(settings.data_root, settings.limits.max_file_bytes)
+    try:
+        gateway = Gateway(settings, store, policy)
+    except Exception:
+        store.close()
+        raise
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -214,19 +224,38 @@ def build_app(settings: Settings, audit: AuditSink | None = None) -> Boundary:
             options = ReadInput.model_validate(payload)
         except (ValueError, ValidationError, RecursionError):
             raise GatewayError("invalid_request", 400) from None
-        fields = policy.fields(resource, options.fields)
+        result = await run_in_threadpool(
+            gateway.read_resource, request.state.principal, resource.id, options.fields
+        )
+        return Response(result, media_type="application/json")
 
-        def execute() -> bytes:
-            return publish_csv(
-                store.read(resource.path),
-                fields,
-                tuple(resource.published_fields),
-                resource.id,
-                policy.version,
-                settings.limits,
-            )
+    @core.get("/v1/tools")
+    async def list_tools(request: Request) -> Response:
+        return Response(
+            json.dumps(gateway.discover(request.state.principal)), media_type="application/json"
+        )
 
-        result = await run_in_threadpool(execute)
+    @core.post("/v1/tools/{tool_id}/invoke")
+    async def invoke_tool(tool_id: str, request: Request) -> Response:
+        # Record only a known, authorized tool ID, never arbitrary caller text.
+        tool = gateway.tools.get(tool_id)
+        if tool is None or request.state.principal not in tool.allowed_principals:
+            raise GatewayError("resource_unavailable", 404)
+        request.state.tool_id = tool.id
+        if (
+            len(request.headers.getlist("content-type")) != 1
+            or request.headers["content-type"].split(";", 1)[0].strip() != "application/json"
+            or request.headers.get("content-encoding", "identity") != "identity"
+        ):
+            raise GatewayError("unsupported_media_type", 415)
+        try:
+            payload = json.loads(await request.body(), object_pairs_hook=unique_object)
+            options = ToolInput.model_validate(payload)
+        except (ValueError, ValidationError, RecursionError):
+            raise GatewayError("invalid_request", 400) from None
+        result = await run_in_threadpool(
+            gateway.invoke, request.state.principal, tool.id, options.arguments
+        )
         return Response(result, media_type="application/json")
 
     return Boundary(core, auth, audit or AuditSink(sys.stdout), settings)

@@ -2,7 +2,7 @@
 
 为 AI Agent 提供受策略约束的私有资源访问。**用户指定资源，网关决定谁可以执行什么操作，以及哪些字段可以返回。**
 
-当前为第一阶段实现：本地 CSV、服务身份认证、字段白名单发布。设计愿景见 [设计草稿](VeilGate-design-draft.md)，实际保证以本文及 [威胁模型](docs/threat-model.md) 为准。
+当前实现包括本地 CSV、固定快照聚合、HTTPS API 适配、工具发现与调用、参数授权和输出白名单发布。设计愿景见 [设计草稿](VeilGate-design-draft.md)，实际保证以本文及 [威胁模型](docs/threat-model.md) 为准。
 
 ## 当前能力
 
@@ -15,7 +15,9 @@
 - 固定错误码、服务器生成的请求 ID、无原文审计记录、响应禁止缓存。
 - 审计写入失败时，不向客户端发布成功结果。
 
-当前**不包含**聚合、API 数据适配、任意代码执行、自由文本 PII 检测、MCP 或行为监控。删除敏感列不是匿名化，也不能识别被错误放入批准列的秘密。
+新增通用工具入口与演示配置见 [网关 MVP 实现与验证](docs/gateway-mvp-validation.md) 和 [examples/gateway.toml](examples/gateway.toml)。真实模型端到端验收仍待执行。
+
+当前**不包含**任意代码执行、自由文本 PII 检测、MCP 或行为监控。删除敏感列不是匿名化，也不能识别被错误放入批准列的秘密。
 
 ## 本地运行
 
@@ -77,9 +79,11 @@ token 由可信 Agent 宿主保存并注入 HTTP 头，不能放入模型提示�
 |---|---|---|
 | `GET /healthz` | 无 | 进程存活 |
 | `GET /readyz` | 无 | 已完成配置、凭据和根目录初始化；不逐文件探测 |
-| `POST /v1/resources/{resource_id}/read` | Bearer | 返回批准的 CSV 字段 |
+| `POST /v1/resources/{resource_id}/read` | Bearer | 返回批准的 CSV 字段（兼容接口） |
+| `GET /v1/tools` | Bearer | 发现获准工具及其有限参数 schema |
+| `POST /v1/tools/{tool_id}/invoke` | Bearer | 统一调用已注册工具 |
 
-请求体必须是 JSON 对象（最多 4096 字节），只允许可选的 `fields` 数组。不接受查询参数、压缩请求、重复 JSON 键或自动重定向。API 不提供文档路由或资源目录枚举。
+请求体必须是 JSON 对象（最多 4096 字节），旧资源接口只允许可选的 `fields` 数组；工具调用接口只允许 `arguments` 对象。不接受查询参数、压缩请求、重复 JSON 键或自动重定向。API 不提供文档路由或资源目录枚举。
 
 错误形如 `{"error":{"code":"invalid_request"}}`，响应头中的 `X-Request-ID` 用于关联审计；客户端不能指定或覆盖它。
 
@@ -133,6 +137,7 @@ docker compose up --build --wait
 
 ```text
 src/veilgate/
+  gateway.py     工具发现、参数授权、适配执行与结果发布
   config.py      严格、带版本的配置模型
   auth.py        凭据与真实身份映射
   policy.py      资源授权及发布字段授权
@@ -144,7 +149,7 @@ src/veilgate/
 tests/           身份、策略、文件边界、发布和异常测试
 ```
 
-资源授权与发布逻辑不依赖 HTTP，未来 API 适配器可以复用。当前故意保持单服务，不提前引入数据库、队列或微服务。
+资源授权与发布逻辑不依赖 HTTP；本地与 API 工具复用统一调用流程。当前故意保持单服务，不提前引入数据库、队列或微服务。
 
 ## 依赖与升级
 

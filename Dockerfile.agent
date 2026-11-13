@@ -1,0 +1,7 @@
+# Demo client contains no gateway source, protected fixtures, or upstream credentials.
+FROM python:3.12-slim-bookworm
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /agent
+COPY scripts/agent_demo.py /agent/agent_demo.py
+USER 65532:65532
+ENTRYPOINT ["python", "/agent/agent_demo.py"]

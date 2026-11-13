@@ -1,0 +1,39 @@
+schema_version = 1
+policy_version = "gateway-demo-v1"
+data_root = "/data"
+
+[[principals]]
+id = "reporting-agent"
+token_env = "VEILGATE_DEMO_TOKEN"
+
+[[principals]]
+id = "second-agent"
+token_env = "VEILGATE_SECOND_TOKEN"
+
+[[tools]]
+id = "regional_sales"
+description = "Compare approved monthly regional order counts and sales totals."
+adapter = "csv_aggregate"
+allowed_principals = ["reporting-agent", "second-agent"]
+path = "orders.csv"
+snapshot_sha256 = "4e0ed9f49943240c3a4a2a47c823d6dad95fb97a3421a5591c0641eff75faf52"
+group_by = "region"
+sum_field = "amount"
+min_group_rows = 2
+published_fields = ["group", "count", "total"]
+arguments = { month = ["2026-10"] }
+argument_filters = { month = "month" }
+
+# Optional API example: replace the endpoint with an operator-approved HTTPS service.
+# The source must return {"orders": [{"order_id": "...", "shipping":
+# {"status": "pending", "expected_date": "2026-11-12"}, "customer": {...}}]}.
+# [[tools]]
+# id = "shipping_orders"
+# description = "Get permitted order references, shipping states and expected dates."
+# adapter = "api_read"
+# allowed_principals = ["reporting-agent", "second-agent"]
+# endpoint = "https://YOUR-APPROVED-SERVICE.example/orders"
+# credential_env = "VEILGATE_ORDERS_CREDENTIAL"
+# records_path = ["orders"]
+# published_fields = ["order_id", "status", "expected_date"]
+# field_paths = { status = ["shipping", "status"], expected_date = ["shipping", "expected_date"] }

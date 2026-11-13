@@ -1,0 +1,22 @@
+schema_version = 1
+policy_version = "example-v1"
+# Set VEILGATE_DATA_ROOT to an absolute, real directory for local execution.
+data_root = "/data"
+
+[[principals]]
+id = "demo-agent"
+token_env = "VEILGATE_DEMO_TOKEN"
+
+[[resources]]
+id = "customers"
+path = "customers.csv"
+allowed_principals = ["demo-agent"]
+published_fields = ["region", "amount"]
+operation = "read_redacted"
+
+[limits]
+max_file_bytes = 1048576
+max_rows = 1000
+max_columns = 100
+max_output_bytes = 1048576
+max_concurrent_requests = 4
